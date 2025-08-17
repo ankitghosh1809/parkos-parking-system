@@ -1,0 +1,1276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ParkOS — Vehicle Parking Management</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Barlow+Condensed:wght@300;400;600;700;800&family=Barlow:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ── RESET & BASE ────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0f11;
+      --surface:   #141619;
+      --card:      #1a1d21;
+      --border:    #2a2e34;
+      --border2:   #373c44;
+      --text:      #e8eaed;
+      --muted:     #6b7280;
+      --accent:    #f59e0b;
+      --accent2:   #fb923c;
+      --green:     #22c55e;
+      --red:       #ef4444;
+      --blue:      #38bdf8;
+      --mono:      'Space Mono', monospace;
+      --display:   'Barlow Condensed', sans-serif;
+      --body:      'Barlow', sans-serif;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--body);
+      font-size: 15px;
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* noise grain overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0.35;
+    }
+
+    /* ── SCANLINE HEADER ─────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 2px solid var(--accent);
+      padding: 0 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 64px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 0 40px rgba(245,158,11,0.08);
+    }
+
+    .logo {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+    .logo-mark {
+      font-family: var(--display);
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+    .logo-sub {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .live-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--green);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+    .live-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.5); }
+      50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(34,197,94,0); }
+    }
+
+    .slot-ticker {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .slot-ticker span { color: var(--accent); font-weight: 700; }
+
+    /* ── LAYOUT ──────────────────────────────────────── */
+    .app {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      min-height: calc(100vh - 64px);
+    }
+
+    /* ── SIDEBAR ─────────────────────────────────────── */
+    aside {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .nav-section-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 2.5px;
+      color: var(--muted);
+      text-transform: uppercase;
+      padding: 16px 24px 8px;
+    }
+
+    .nav-btn {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 24px;
+      background: none;
+      border: none;
+      border-left: 3px solid transparent;
+      color: var(--muted);
+      font-family: var(--display);
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: left;
+      width: 100%;
+    }
+    .nav-btn:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+    .nav-btn.active {
+      color: var(--accent);
+      border-left-color: var(--accent);
+      background: rgba(245,158,11,0.06);
+    }
+    .nav-btn svg { flex-shrink: 0; width: 18px; height: 18px; }
+
+    .sidebar-stats {
+      margin-top: auto;
+      padding: 20px 24px;
+      border-top: 1px solid var(--border);
+    }
+    .sidebar-stat {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+    }
+    .sidebar-stat-label {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .sidebar-stat-value {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    /* ── MAIN ────────────────────────────────────────── */
+    main { background: var(--bg); overflow-y: auto; }
+
+    .view { display: none; padding: 32px; animation: fadeIn 0.2s ease; }
+    .view.active { display: block; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    /* ── PAGE HEADER ─────────────────────────────────── */
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 28px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .page-title {
+      font-family: var(--display);
+      font-size: 36px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      text-transform: uppercase;
+      line-height: 1;
+    }
+    .page-title span { color: var(--accent); }
+    .page-subtitle {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 1.5px;
+      margin-top: 6px;
+      text-transform: uppercase;
+    }
+
+    /* ── STAT CARDS ──────────────────────────────────── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+    }
+    .stat-card.amber::after  { background: var(--accent); }
+    .stat-card.green::after  { background: var(--green); }
+    .stat-card.red::after    { background: var(--red); }
+    .stat-card.blue::after   { background: var(--blue); }
+
+    .stat-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .stat-value {
+      font-family: var(--display);
+      font-size: 44px;
+      font-weight: 800;
+      line-height: 1;
+      color: var(--text);
+    }
+    .stat-card.amber .stat-value { color: var(--accent); }
+    .stat-card.green .stat-value { color: var(--green); }
+    .stat-card.red .stat-value   { color: var(--red); }
+    .stat-card.blue .stat-value  { color: var(--blue); }
+
+    .stat-sub {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    /* occupancy bar */
+    .occ-bar-wrap { margin-top: 8px; }
+    .occ-bar-bg {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .occ-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--green), var(--accent));
+      transition: width 0.6s ease;
+      border-radius: 2px;
+    }
+
+    /* ── GRID LAYOUT ─────────────────────────────────── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .full-col { grid-column: 1 / -1; }
+
+    /* ── PANEL ───────────────────────────────────────── */
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-title {
+      font-family: var(--display);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+    .panel-body { padding: 20px; }
+
+    /* ── FORMS ───────────────────────────────────────── */
+    .form-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    label {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    input, select {
+      background: var(--surface);
+      border: 1px solid var(--border2);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 10px 14px;
+      outline: none;
+      transition: border-color 0.2s;
+      width: 100%;
+      -webkit-appearance: none;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    input::placeholder { color: var(--muted); }
+    select option { background: var(--card); }
+
+    /* ── BUTTONS ─────────────────────────────────────── */
+    .btn {
+      font-family: var(--display);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      padding: 12px 28px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+    }
+    .btn-primary:hover { background: var(--accent2); }
+    .btn-danger {
+      background: transparent;
+      color: var(--red);
+      border: 1px solid var(--red);
+    }
+    .btn-danger:hover { background: var(--red); color: #fff; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border2);
+    }
+    .btn-ghost:hover { color: var(--text); border-color: var(--text); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-sm { padding: 6px 14px; font-size: 11px; }
+
+    /* ── TABLE ───────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    thead tr { border-bottom: 2px solid var(--border2); }
+    th {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--muted);
+      text-transform: uppercase;
+      padding: 10px 14px;
+      text-align: left;
+      white-space: nowrap;
+    }
+    td {
+      padding: 12px 14px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+    }
+    tbody tr { transition: background 0.1s; }
+    tbody tr:hover { background: rgba(255,255,255,0.02); }
+    tbody tr:last-child td { border-bottom: none; }
+
+    /* ── BADGES ──────────────────────────────────────── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 1px;
+      font-weight: 700;
+      text-transform: uppercase;
+      border-radius: 2px;
+    }
+    .badge-car   { background: rgba(56,189,248,0.15); color: var(--blue); }
+    .badge-bike  { background: rgba(34,197,94,0.15);  color: var(--green); }
+    .badge-truck { background: rgba(245,158,11,0.15); color: var(--accent); }
+
+    /* ── SLOT GRID ───────────────────────────────────── */
+    .slot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+      gap: 6px;
+    }
+    .slot-cell {
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--green);
+      transition: all 0.2s;
+      position: relative;
+    }
+    .slot-cell.occupied {
+      background: rgba(245,158,11,0.1);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .slot-cell:hover { border-color: var(--border2); }
+
+    /* ── TOAST ───────────────────────────────────────── */
+    #toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9998;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .toast {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      padding: 14px 20px;
+      min-width: 280px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+      animation: slideIn 0.25s ease;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    .toast.success { border-left-color: var(--green); }
+    .toast.error   { border-left-color: var(--red); }
+    .toast-title {
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .toast.success .toast-title { color: var(--green); }
+    .toast.error   .toast-title { color: var(--red); }
+    .toast.info    .toast-title { color: var(--accent); }
+    @keyframes slideIn {
+      from { transform: translateX(120%); opacity: 0; }
+      to   { transform: none; opacity: 1; }
+    }
+
+    /* ── MODAL ───────────────────────────────────────── */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: var(--card);
+      border: 1px solid var(--border2);
+      border-top: 2px solid var(--accent);
+      padding: 28px;
+      min-width: 360px;
+      max-width: 480px;
+      width: 90%;
+      animation: fadeIn 0.2s ease;
+    }
+    .modal-title {
+      font-family: var(--display);
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .modal-sub {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 20px;
+    }
+    .receipt-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .receipt-row:last-child { border: none; }
+    .receipt-row .key { color: var(--muted); }
+    .receipt-row .val { color: var(--text); font-weight: 700; }
+    .receipt-total { color: var(--accent) !important; font-size: 18px !important; }
+
+    /* ── EMPTY STATE ─────────────────────────────────── */
+    .empty-state {
+      padding: 48px;
+      text-align: center;
+    }
+    .empty-state-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.4; }
+    .empty-state p {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    /* ── REPORT VIEW ─────────────────────────────────── */
+    .report-breakdown {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .breakdown-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 16px;
+      text-align: center;
+    }
+    .breakdown-card .bc-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .breakdown-card .bc-count {
+      font-family: var(--display);
+      font-size: 32px;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .breakdown-card .bc-rev {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--accent);
+      margin-top: 4px;
+    }
+
+    /* ── MISC ────────────────────────────────────────── */
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 20px 0;
+    }
+    .tag {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border: 1px solid var(--border2);
+      color: var(--muted);
+    }
+    .refresh-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px;
+      transition: color 0.15s;
+    }
+    .refresh-btn:hover { color: var(--accent); }
+    .spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <span class="logo-mark">ParkOS</span>
+    <span class="logo-sub">v1.0 — Management System</span>
+  </div>
+  <div class="header-status">
+    <div class="live-badge"><div class="live-dot"></div>LIVE</div>
+    <div class="slot-ticker">SLOTS: <span id="hdr-occ">—</span> / <span id="hdr-total">—</span></div>
+  </div>
+</header>
+
+<!-- APP -->
+<div class="app">
+
+  <!-- SIDEBAR -->
+  <aside>
+    <div class="nav-section-label">Operations</div>
+    <button class="nav-btn active" onclick="showView('dashboard')" id="nav-dashboard">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v5a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 13a1 1 0 011-1h4a1 1 0 011 1v6a1 1 0 01-1 1h-4a1 1 0 01-1-1v-6z"/></svg>
+      Dashboard
+    </button>
+    <button class="nav-btn" onclick="showView('park')" id="nav-park">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Park Vehicle
+    </button>
+    <button class="nav-btn" onclick="showView('checkout')" id="nav-checkout">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+      Checkout
+    </button>
+    <button class="nav-btn" onclick="showView('vehicles')" id="nav-vehicles">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10l2.6.87M13 16H5m8 0h3m1-11h2l3 5h1a1 1 0 011 1v3h-1.5"/></svg>
+      Active Vehicles
+    </button>
+    <button class="nav-btn" onclick="showView('slots')" id="nav-slots">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+      Slot Map
+    </button>
+
+    <div class="nav-section-label">Analytics</div>
+    <button class="nav-btn" onclick="showView('report')" id="nav-report">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      Revenue Report
+    </button>
+    <button class="nav-btn" onclick="showView('history')" id="nav-history">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      History
+    </button>
+
+    <!-- sidebar live stats -->
+    <div class="sidebar-stats">
+      <div class="sidebar-stat">
+        <span class="sidebar-stat-label">Total Sessions</span>
+        <span class="sidebar-stat-value" id="sb-sessions">—</span>
+      </div>
+      <div class="sidebar-stat">
+        <span class="sidebar-stat-label">All-time Revenue</span>
+        <span class="sidebar-stat-value" id="sb-revenue">—</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main>
+
+    <!-- ── DASHBOARD ── -->
+    <div class="view active" id="view-dashboard">
+      <div class="page-header">
+        <div>
+          <div class="page-title">PARK<span>OS</span> DASHBOARD</div>
+          <div class="page-subtitle">Real-time lot overview</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="loadDashboard()">
+          <svg id="dash-spin" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          REFRESH
+        </button>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card amber">
+          <div class="stat-label">Total Slots</div>
+          <div class="stat-value" id="d-total">—</div>
+          <div class="stat-sub">Configured capacity</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-label">Occupied</div>
+          <div class="stat-value" id="d-occ">—</div>
+          <div class="stat-sub">Currently parked</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-label">Available</div>
+          <div class="stat-value" id="d-avail">—</div>
+          <div class="stat-sub">Free slots</div>
+        </div>
+        <div class="stat-card blue">
+          <div class="stat-label">Occupancy</div>
+          <div class="stat-value" id="d-pct">—</div>
+          <div class="occ-bar-wrap">
+            <div class="occ-bar-bg"><div class="occ-bar-fill" id="d-bar" style="width:0%"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Quick Park</span>
+          </div>
+          <div class="panel-body">
+            <div class="form-row">
+              <label>Vehicle Number</label>
+              <input type="text" id="qp-number" placeholder="WB-01-AB-1234" oninput="this.value=this.value.toUpperCase()" />
+            </div>
+            <div class="form-row">
+              <label>Vehicle Type</label>
+              <select id="qp-type">
+                <option value="car">Car — ₹30/hr</option>
+                <option value="bike">Bike — ₹10/hr</option>
+                <option value="truck">Truck — ₹60/hr</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="quickPark()" style="width:100%">PARK VEHICLE</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Quick Checkout</span>
+          </div>
+          <div class="panel-body">
+            <div class="form-row">
+              <label>Vehicle Number</label>
+              <input type="text" id="qc-number" placeholder="WB-01-AB-1234" oninput="this.value=this.value.toUpperCase()" />
+            </div>
+            <div style="height:16px"></div>
+            <button class="btn btn-danger" onclick="quickCheckout()" style="width:100%; margin-top:8px">CHECKOUT & GENERATE RECEIPT</button>
+          </div>
+        </div>
+
+        <div class="panel full-col">
+          <div class="panel-header">
+            <span class="panel-title">Currently Parked</span>
+            <button class="refresh-btn" onclick="loadDashboard()">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            </button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Slot</th><th>Vehicle No.</th><th>Type</th><th>Entry Time</th><th>Action</th></tr></thead>
+              <tbody id="dash-table"><tr><td colspan="5" style="text-align:center;color:var(--muted);padding:32px">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PARK VEHICLE ── -->
+    <div class="view" id="view-park">
+      <div class="page-header">
+        <div>
+          <div class="page-title">PARK <span>VEHICLE</span></div>
+          <div class="page-subtitle">Assign a slot to a new entry</div>
+        </div>
+      </div>
+      <div style="max-width:480px">
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Entry Details</span></div>
+          <div class="panel-body">
+            <div class="form-row">
+              <label>Vehicle Registration Number</label>
+              <input type="text" id="pk-number" placeholder="e.g. WB-01-AB-1234" oninput="this.value=this.value.toUpperCase()" />
+            </div>
+            <div class="form-row">
+              <label>Vehicle Type</label>
+              <select id="pk-type">
+                <option value="car">🚗  Car — ₹30 per hour</option>
+                <option value="bike">🏍  Bike — ₹10 per hour</option>
+                <option value="truck">🚛  Truck — ₹60 per hour</option>
+              </select>
+            </div>
+            <hr class="divider" />
+            <button class="btn btn-primary" id="pk-btn" onclick="parkVehicle()" style="width:100%">
+              ASSIGN SLOT & PARK
+            </button>
+          </div>
+        </div>
+
+        <div style="margin-top:16px" class="panel" id="pk-result" style="display:none">
+          <div class="panel-header"><span class="panel-title" style="color:var(--green)">✓ Parked Successfully</span></div>
+          <div class="panel-body" id="pk-result-body"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CHECKOUT ── -->
+    <div class="view" id="view-checkout">
+      <div class="page-header">
+        <div>
+          <div class="page-title">VEHICLE <span>CHECKOUT</span></div>
+          <div class="page-subtitle">Process exit and calculate fee</div>
+        </div>
+      </div>
+      <div style="max-width:480px">
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Exit Vehicle</span></div>
+          <div class="panel-body">
+            <div class="form-row">
+              <label>Vehicle Registration Number</label>
+              <input type="text" id="co-number" placeholder="e.g. WB-01-AB-1234" oninput="this.value=this.value.toUpperCase()" />
+            </div>
+            <button class="btn btn-danger" id="co-btn" onclick="checkoutVehicle()" style="width:100%">
+              PROCESS CHECKOUT
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ACTIVE VEHICLES ── -->
+    <div class="view" id="view-vehicles">
+      <div class="page-header">
+        <div>
+          <div class="page-title">ACTIVE <span>VEHICLES</span></div>
+          <div class="page-subtitle">All vehicles currently in the lot</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="loadVehicles()">REFRESH</button>
+      </div>
+      <div class="panel">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Slot</th><th>Vehicle No.</th><th>Type</th><th>Entry Time</th><th>Action</th></tr></thead>
+            <tbody id="vehicles-table"><tr><td colspan="5" style="text-align:center;color:var(--muted);padding:32px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SLOT MAP ── -->
+    <div class="view" id="view-slots">
+      <div class="page-header">
+        <div>
+          <div class="page-title">SLOT <span>MAP</span></div>
+          <div class="page-subtitle">Visual overview of the parking lot</div>
+        </div>
+        <div style="display:flex;gap:16px;align-items:center">
+          <span class="tag" style="color:var(--green);border-color:var(--green)">■ FREE</span>
+          <span class="tag" style="color:var(--accent);border-color:var(--accent)">■ OCCUPIED</span>
+          <button class="btn btn-ghost btn-sm" onclick="loadSlotMap()">REFRESH</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-body">
+          <div class="slot-grid" id="slot-grid">
+            <div style="color:var(--muted);font-family:var(--mono);font-size:12px">Loading…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── REVENUE REPORT ── -->
+    <div class="view" id="view-report">
+      <div class="page-header">
+        <div>
+          <div class="page-title">REVENUE <span>REPORT</span></div>
+          <div class="page-subtitle">Daily financial summary</div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="loadReport()">GENERATE</button>
+      </div>
+
+      <div style="max-width:700px">
+        <div class="report-breakdown" id="report-breakdown">
+          <div class="breakdown-card">
+            <div class="bc-label">Cars</div>
+            <div class="bc-count" id="r-cars">—</div>
+            <div class="bc-rev" id="r-cars-rev">₹ —</div>
+          </div>
+          <div class="breakdown-card">
+            <div class="bc-label">Bikes</div>
+            <div class="bc-count" id="r-bikes">—</div>
+            <div class="bc-rev" id="r-bikes-rev">₹ —</div>
+          </div>
+          <div class="breakdown-card">
+            <div class="bc-label">Trucks</div>
+            <div class="bc-count" id="r-trucks">—</div>
+            <div class="bc-rev" id="r-trucks-rev">₹ —</div>
+          </div>
+        </div>
+
+        <div class="stat-grid" style="grid-template-columns:1fr 1fr;margin-bottom:24px">
+          <div class="stat-card amber">
+            <div class="stat-label">Total Vehicles</div>
+            <div class="stat-value" id="r-total">—</div>
+            <div class="stat-sub">Served today</div>
+          </div>
+          <div class="stat-card green">
+            <div class="stat-label">Total Revenue</div>
+            <div class="stat-value" id="r-rev" style="font-size:32px">₹ —</div>
+            <div class="stat-sub">Today's earnings</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Today's Transactions</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>Vehicle No.</th><th>Type</th><th>Slot</th><th>Duration</th><th>Entry</th><th>Exit</th><th>Fee</th></tr></thead>
+              <tbody id="report-table"><tr><td colspan="8" style="text-align:center;color:var(--muted);padding:32px">Click GENERATE to load today's report</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── HISTORY ── -->
+    <div class="view" id="view-history">
+      <div class="page-header">
+        <div>
+          <div class="page-title">TRANSACTION <span>HISTORY</span></div>
+          <div class="page-subtitle">All completed parking sessions</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="loadHistory()">REFRESH</button>
+      </div>
+      <div class="panel">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Vehicle No.</th><th>Type</th><th>Slot</th><th>Duration</th><th>Entry</th><th>Exit</th><th>Fee</th></tr></thead>
+            <tbody id="history-table"><tr><td colspan="8" style="text-align:center;color:var(--muted);padding:32px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- CHECKOUT RECEIPT MODAL -->
+<div class="modal-backdrop" id="receipt-modal">
+  <div class="modal">
+    <div class="modal-title">PARKING RECEIPT</div>
+    <div class="modal-sub" id="receipt-vehicle"></div>
+    <div id="receipt-rows"></div>
+    <hr class="divider"/>
+    <button class="btn btn-primary" onclick="closeModal()" style="width:100%;margin-top:12px">DONE</button>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div id="toast-container"></div>
+
+<script>
+  // ── CONFIG ────────────────────────────────────────────────
+  const API = 'http://localhost:8000';
+
+  // ── NAVIGATION ────────────────────────────────────────────
+  const views = ['dashboard','park','checkout','vehicles','slots','report','history'];
+
+  function showView(name) {
+    views.forEach(v => {
+      document.getElementById('view-' + v).classList.toggle('active', v === name);
+      document.getElementById('nav-' + v).classList.toggle('active', v === name);
+    });
+    // lazy load
+    if (name === 'dashboard') loadDashboard();
+    else if (name === 'vehicles') loadVehicles();
+    else if (name === 'slots') loadSlotMap();
+    else if (name === 'history') loadHistory();
+    else if (name === 'report') loadReport();
+  }
+
+  // ── API HELPERS ───────────────────────────────────────────
+  async function api(path, opts = {}) {
+    const res = await fetch(API + path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Request failed');
+    return data;
+  }
+
+  // ── TOAST ─────────────────────────────────────────────────
+  function toast(type, title, msg) {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.innerHTML = `<div class="toast-title">${title}</div><div>${msg}</div>`;
+    document.getElementById('toast-container').appendChild(el);
+    setTimeout(() => el.remove(), 4000);
+  }
+
+  // ── BADGE ─────────────────────────────────────────────────
+  function typeBadge(t) {
+    return `<span class="badge badge-${t}">${t}</span>`;
+  }
+
+  // ── HEADER TICKER ─────────────────────────────────────────
+  async function refreshHeader() {
+    try {
+      const s = await api('/api/status');
+      document.getElementById('hdr-occ').textContent   = s.occupied;
+      document.getElementById('hdr-total').textContent = s.total;
+    } catch (_) {}
+  }
+
+  async function refreshSidebar() {
+    try {
+      const s = await api('/api/summary');
+      document.getElementById('sb-sessions').textContent = s.total_sessions;
+      document.getElementById('sb-revenue').textContent  = '₹' + s.total_revenue.toLocaleString();
+    } catch (_) {}
+  }
+
+  // ── DASHBOARD ─────────────────────────────────────────────
+  async function loadDashboard() {
+    const icon = document.getElementById('dash-spin');
+    icon.classList.add('spin');
+    try {
+      const [status, { vehicles }] = await Promise.all([
+        api('/api/status'),
+        api('/api/vehicles'),
+      ]);
+
+      document.getElementById('d-total').textContent = status.total;
+      document.getElementById('d-occ').textContent   = status.occupied;
+      document.getElementById('d-avail').textContent = status.available;
+      document.getElementById('d-pct').textContent   = status.occupancy_pct + '%';
+      document.getElementById('d-bar').style.width   = status.occupancy_pct + '%';
+
+      document.getElementById('hdr-occ').textContent   = status.occupied;
+      document.getElementById('hdr-total').textContent = status.total;
+
+      renderVehicleTable('dash-table', vehicles, true);
+    } catch (e) {
+      toast('error', 'ERROR', e.message);
+    }
+    icon.classList.remove('spin');
+    refreshSidebar();
+  }
+
+  function renderVehicleTable(tbodyId, vehicles, withAction = false) {
+    const tbody = document.getElementById(tbodyId);
+    if (!vehicles.length) {
+      tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="empty-state-icon">🅿</div><p>No vehicles currently parked</p></div></td></tr>`;
+      return;
+    }
+    tbody.innerHTML = vehicles.map(v => `
+      <tr>
+        <td><strong>${v.slot}</strong></td>
+        <td><span style="font-family:var(--mono);font-size:13px;font-weight:700">${v.vehicle_number}</span></td>
+        <td>${typeBadge(v.vehicle_type)}</td>
+        <td style="color:var(--muted)">${v.entry_time}</td>
+        <td>${withAction ? `<button class="btn btn-danger btn-sm" onclick="quickCheckoutFromTable('${v.vehicle_number}')">CHECKOUT</button>` : ''}</td>
+      </tr>
+    `).join('');
+  }
+
+  // ── QUICK PARK ────────────────────────────────────────────
+  async function quickPark() {
+    const num  = document.getElementById('qp-number').value.trim();
+    const type = document.getElementById('qp-type').value;
+    if (!num) { toast('error','VALIDATION','Vehicle number is required'); return; }
+    try {
+      const r = await api('/api/park', {
+        method: 'POST',
+        body: JSON.stringify({ vehicle_number: num, vehicle_type: type }),
+      });
+      toast('success', 'PARKED', `${num} → Slot ${r.slot}`);
+      document.getElementById('qp-number').value = '';
+      loadDashboard();
+    } catch (e) {
+      toast('error', 'FAILED', e.message);
+    }
+  }
+
+  async function quickCheckout() {
+    const num = document.getElementById('qc-number').value.trim();
+    if (!num) { toast('error','VALIDATION','Vehicle number is required'); return; }
+    await doCheckout(num);
+    document.getElementById('qc-number').value = '';
+  }
+
+  async function quickCheckoutFromTable(num) {
+    await doCheckout(num);
+  }
+
+  // ── PARK VEHICLE PAGE ─────────────────────────────────────
+  async function parkVehicle() {
+    const num  = document.getElementById('pk-number').value.trim();
+    const type = document.getElementById('pk-type').value;
+    if (!num) { toast('error','VALIDATION','Vehicle number is required'); return; }
+    const btn = document.getElementById('pk-btn');
+    btn.disabled = true;
+    try {
+      const r = await api('/api/park', {
+        method: 'POST',
+        body: JSON.stringify({ vehicle_number: num, vehicle_type: type }),
+      });
+      const result = document.getElementById('pk-result');
+      document.getElementById('pk-result-body').innerHTML = `
+        <div class="receipt-row"><span class="key">Vehicle</span><span class="val">${r.vehicle_number}</span></div>
+        <div class="receipt-row"><span class="key">Type</span><span class="val">${r.vehicle_type}</span></div>
+        <div class="receipt-row"><span class="key">Assigned Slot</span><span class="val" style="color:var(--accent);font-size:22px">${r.slot}</span></div>
+      `;
+      result.style.display = 'block';
+      document.getElementById('pk-number').value = '';
+      toast('success', 'PARKED', `Slot ${r.slot} assigned`);
+      refreshHeader();
+    } catch (e) {
+      toast('error', 'FAILED', e.message);
+    }
+    btn.disabled = false;
+  }
+
+  // ── CHECKOUT PAGE ─────────────────────────────────────────
+  async function checkoutVehicle() {
+    const num = document.getElementById('co-number').value.trim();
+    if (!num) { toast('error','VALIDATION','Vehicle number is required'); return; }
+    const btn = document.getElementById('co-btn');
+    btn.disabled = true;
+    await doCheckout(num);
+    document.getElementById('co-number').value = '';
+    btn.disabled = false;
+  }
+
+  async function doCheckout(num) {
+    try {
+      const r = await api(`/api/checkout/${num}`, { method: 'POST' });
+      showReceipt(r);
+      toast('success', 'CHECKOUT', `Fee: ₹${r.fee}`);
+      refreshHeader(); refreshSidebar();
+      if (document.getElementById('view-dashboard').classList.contains('active')) loadDashboard();
+      if (document.getElementById('view-vehicles').classList.contains('active')) loadVehicles();
+    } catch (e) {
+      toast('error', 'NOT FOUND', e.message);
+    }
+  }
+
+  // ── RECEIPT MODAL ─────────────────────────────────────────
+  function showReceipt(r) {
+    document.getElementById('receipt-vehicle').textContent = `Vehicle: ${r.vehicle_number}`;
+    document.getElementById('receipt-rows').innerHTML = `
+      <div class="receipt-row"><span class="key">Slot</span><span class="val">${r.slot}</span></div>
+      <div class="receipt-row"><span class="key">Duration</span><span class="val">${r.duration_hours} hour(s)</span></div>
+      <div class="receipt-row"><span class="key">Total Fee</span><span class="val receipt-total">₹ ${r.fee.toFixed(2)}</span></div>
+    `;
+    document.getElementById('receipt-modal').classList.add('open');
+  }
+
+  function closeModal() {
+    document.getElementById('receipt-modal').classList.remove('open');
+  }
+
+  // ── ACTIVE VEHICLES ───────────────────────────────────────
+  async function loadVehicles() {
+    try {
+      const { vehicles } = await api('/api/vehicles');
+      renderVehicleTable('vehicles-table', vehicles, true);
+    } catch (e) {
+      toast('error', 'ERROR', e.message);
+    }
+  }
+
+  // ── SLOT MAP ──────────────────────────────────────────────
+  async function loadSlotMap() {
+    try {
+      const [status, { vehicles }] = await Promise.all([
+        api('/api/status'),
+        api('/api/vehicles'),
+      ]);
+      const occupied = new Set(vehicles.map(v => parseInt(v.slot)));
+      const grid = document.getElementById('slot-grid');
+      grid.innerHTML = '';
+      for (let i = 1; i <= status.total; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'slot-cell' + (occupied.has(i) ? ' occupied' : '');
+        cell.textContent = i;
+        if (occupied.has(i)) {
+          const v = vehicles.find(x => parseInt(x.slot) === i);
+          cell.title = v ? `${v.vehicle_number} (${v.vehicle_type})` : '';
+        }
+        grid.appendChild(cell);
+      }
+    } catch (e) {
+      toast('error', 'ERROR', e.message);
+    }
+  }
+
+  // ── REPORT ────────────────────────────────────────────────
+  async function loadReport() {
+    try {
+      const r = await api('/api/report');
+      document.getElementById('r-total').textContent    = r.total_vehicles;
+      document.getElementById('r-rev').textContent      = '₹' + r.total_revenue.toLocaleString();
+      document.getElementById('r-cars').textContent     = r.breakdown.car?.count    ?? 0;
+      document.getElementById('r-cars-rev').textContent = '₹' + (r.breakdown.car?.revenue ?? 0);
+      document.getElementById('r-bikes').textContent    = r.breakdown.bike?.count   ?? 0;
+      document.getElementById('r-bikes-rev').textContent= '₹' + (r.breakdown.bike?.revenue ?? 0);
+      document.getElementById('r-trucks').textContent   = r.breakdown.truck?.count  ?? 0;
+      document.getElementById('r-trucks-rev').textContent='₹' + (r.breakdown.truck?.revenue ?? 0);
+
+      const tbody = document.getElementById('report-table');
+      if (!r.transactions.length) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:32px">No transactions today</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = r.transactions.map((t, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td><strong>${t.vehicle_number}</strong></td>
+          <td>${typeBadge(t.vehicle_type)}</td>
+          <td>${t.slot}</td>
+          <td>${t.duration_hours}h</td>
+          <td style="color:var(--muted)">${t.entry_time}</td>
+          <td style="color:var(--muted)">${t.exit_time}</td>
+          <td style="color:var(--accent);font-weight:700">₹${parseFloat(t.fee).toFixed(2)}</td>
+        </tr>
+      `).join('');
+    } catch (e) {
+      toast('error', 'ERROR', e.message);
+    }
+  }
+
+  // ── HISTORY ───────────────────────────────────────────────
+  async function loadHistory() {
+    try {
+      const { records } = await api('/api/log');
+      const tbody = document.getElementById('history-table');
+      if (!records.length) {
+        tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="empty-state-icon">📋</div><p>No transactions yet</p></div></td></tr>`;
+        return;
+      }
+      const rev = [...records].reverse();
+      tbody.innerHTML = rev.map((r, i) => `
+        <tr>
+          <td>${rev.length - i}</td>
+          <td><strong>${r.vehicle_number}</strong></td>
+          <td>${typeBadge(r.vehicle_type)}</td>
+          <td>${r.slot}</td>
+          <td>${r.duration_hours}h</td>
+          <td style="color:var(--muted)">${r.entry_time}</td>
+          <td style="color:var(--muted)">${r.exit_time}</td>
+          <td style="color:var(--accent);font-weight:700">₹${parseFloat(r.fee).toFixed(2)}</td>
+        </tr>
+      `).join('');
+    } catch (e) {
+      toast('error', 'ERROR', e.message);
+    }
+  }
+
+  // ── INIT ──────────────────────────────────────────────────
+  loadDashboard();
+  setInterval(refreshHeader, 30000);
+</script>
+
+</body>
+</html>
