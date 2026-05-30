@@ -8,12 +8,13 @@ PARKING_RATES = {
     "truck": 60,
 }
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+# FIX: Use /tmp — writable on Vercel serverless, unlike the deploy directory
+DATA_DIR    = "/tmp/parking_data"
 ACTIVE_FILE = os.path.join(DATA_DIR, "active_sessions.csv")
-LOG_FILE = os.path.join(DATA_DIR, "parking_log.csv")
+LOG_FILE    = os.path.join(DATA_DIR, "parking_log.csv")
 
 ACTIVE_HEADERS = ["slot", "vehicle_number", "vehicle_type", "entry_time"]
-LOG_HEADERS = ["vehicle_number", "vehicle_type", "slot", "entry_time", "exit_time", "duration_hours", "fee"]
+LOG_HEADERS    = ["vehicle_number", "vehicle_type", "slot", "entry_time", "exit_time", "duration_hours", "fee"]
 
 
 def _ensure_data_dir():
@@ -43,6 +44,7 @@ def _append_to_log(record):
         writer = csv.DictWriter(f, fieldnames=LOG_HEADERS)
         if not file_exists:
             writer.writeheader()
+        writer.writerow(record)
         writer.writerow(record)
 
 
