@@ -3,7 +3,7 @@ import csv
 from datetime import datetime, date
 from collections import defaultdict
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DATA_DIR = "/tmp/parking_data"
 LOG_FILE = os.path.join(DATA_DIR, "parking_log.csv")
 REPORTS_DIR = os.path.join(DATA_DIR, "reports")
 

@@ -45,7 +45,6 @@ def _append_to_log(record):
         if not file_exists:
             writer.writeheader()
         writer.writerow(record)
-        writer.writerow(record)
 
 
 def _calculate_fee(entry_time_str, exit_time, vehicle_type):

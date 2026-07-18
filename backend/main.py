@@ -156,8 +156,3 @@ def all_time_summary():
 @app.get("/", include_in_schema=False)
 def root():
     return {"status": "ok", "message": "Parking Management API is running. Visit /docs for the API reference."}
--e 
-
-# Vercel serverless handler
-from mangum import Mangum
-handler = Mangum(app)
