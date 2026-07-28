@@ -1,21 +1,28 @@
-import os, sys, pytest
+import os
+import sys
+
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import parking as parking_module
+import db
 from parking import ParkingLot
 from reports import generate_daily_report, get_all_time_summary
 
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("DATABASE_URL"),
+    reason="DATABASE_URL not set - point it at a scratch Postgres/Neon branch to run these tests",
+)
+
 
 @pytest.fixture(autouse=True)
-def isolated(tmp_path, monkeypatch):
-    monkeypatch.setattr(parking_module, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(parking_module, "ACTIVE_FILE", str(tmp_path / "active_sessions.csv"))
-    monkeypatch.setattr(parking_module, "LOG_FILE", str(tmp_path / "parking_log.csv"))
-
-    import reports as rm
-    monkeypatch.setattr(rm, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(rm, "LOG_FILE", str(tmp_path / "parking_log.csv"))
-    monkeypatch.setattr(rm, "REPORTS_DIR", str(tmp_path / "reports"))
+def clean_tables():
+    conn = db.get_connection()
+    db.ensure_schema(conn)
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE active_sessions, parking_log RESTART IDENTITY")
+    conn.commit()
+    conn.close()
     yield
 
 

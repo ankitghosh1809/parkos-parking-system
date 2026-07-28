@@ -1,57 +1,17 @@
-import os
-import csv
 from datetime import datetime
 
-PARKING_RATES = {
-    "car": 30,
-    "bike": 10,
-    "truck": 60,
-}
+import psycopg2
 
-# FIX: Use /tmp — writable on Vercel serverless, unlike the deploy directory
-DATA_DIR    = "/tmp/parking_data"
-ACTIVE_FILE = os.path.join(DATA_DIR, "active_sessions.csv")
-LOG_FILE    = os.path.join(DATA_DIR, "parking_log.csv")
+from db import get_connection, ensure_schema
 
-ACTIVE_HEADERS = ["slot", "vehicle_number", "vehicle_type", "entry_time"]
-LOG_HEADERS    = ["vehicle_number", "vehicle_type", "slot", "entry_time", "exit_time", "duration_hours", "fee"]
+PARKING_RATES = {"car": 30, "bike": 10, "truck": 60}
+DATE_FMT = "%Y-%m-%d %H:%M:%S"
 
 
-def _ensure_data_dir():
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-
-def _read_active_sessions():
-    _ensure_data_dir()
-    if not os.path.exists(ACTIVE_FILE):
-        return []
-    with open(ACTIVE_FILE, "r", newline="") as f:
-        return list(csv.DictReader(f))
-
-
-def _write_active_sessions(sessions):
-    _ensure_data_dir()
-    with open(ACTIVE_FILE, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=ACTIVE_HEADERS)
-        writer.writeheader()
-        writer.writerows(sessions)
-
-
-def _append_to_log(record):
-    _ensure_data_dir()
-    file_exists = os.path.exists(LOG_FILE)
-    with open(LOG_FILE, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=LOG_HEADERS)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(record)
-
-
-def _calculate_fee(entry_time_str, exit_time, vehicle_type):
-    entry_time = datetime.strptime(entry_time_str, "%Y-%m-%d %H:%M:%S")
+def _calculate_fee(entry_time, exit_time, vehicle_type):
     delta = exit_time - entry_time
     total_seconds = delta.total_seconds()
-    hours = max(1, int(total_seconds / 3600) + (1 if total_seconds % 3600 > 0 else 0))
+    hours = max(1, int(total_seconds // 3600) + (1 if total_seconds % 3600 else 0))
     rate = PARKING_RATES.get(vehicle_type.lower(), 30)
     return hours, round(hours * rate, 2)
 
@@ -60,77 +20,133 @@ class ParkingLot:
     def __init__(self, total_slots=50):
         self.total_slots = total_slots
 
-    def _get_occupied_slots(self):
-        return {int(s["slot"]) for s in _read_active_sessions()}
-
-    def _find_free_slot(self):
-        occupied = self._get_occupied_slots()
+    def _find_free_slot(self, cur):
+        cur.execute("SELECT slot FROM active_sessions")
+        occupied = {row["slot"] for row in cur.fetchall()}
         for slot in range(1, self.total_slots + 1):
             if slot not in occupied:
                 return slot
         return None
 
-    def park_vehicle(self, vehicle_number: str, vehicle_type: str):
-        sessions = _read_active_sessions()
-        for s in sessions:
-            if s["vehicle_number"] == vehicle_number:
-                return None  # already parked
+    def park_vehicle(self, vehicle_number, vehicle_type):
+        conn = get_connection()
+        try:
+            ensure_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM active_sessions WHERE vehicle_number = %s",
+                    (vehicle_number,),
+                )
+                if cur.fetchone():
+                    return None  # already parked
 
-        slot = self._find_free_slot()
-        if slot is None:
-            return None  # lot full
+                slot = self._find_free_slot(cur)
+                if slot is None:
+                    return None  # lot full
 
-        entry_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sessions.append({
-            "slot": slot,
-            "vehicle_number": vehicle_number,
-            "vehicle_type": vehicle_type,
-            "entry_time": entry_time,
-        })
-        _write_active_sessions(sessions)
-        return slot
+                entry_time = datetime.now()
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO active_sessions
+                            (slot, vehicle_number, vehicle_type, entry_time)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (slot, vehicle_number, vehicle_type, entry_time),
+                    )
+                except psycopg2.IntegrityError:
+                    conn.rollback()
+                    return None
+            conn.commit()
+            return slot
+        finally:
+            conn.close()
 
-    def remove_vehicle(self, vehicle_number: str):
-        sessions = _read_active_sessions()
-        found = None
-        remaining = []
+    def remove_vehicle(self, vehicle_number):
+        conn = get_connection()
+        try:
+            ensure_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT slot, vehicle_type, entry_time
+                    FROM active_sessions WHERE vehicle_number = %s
+                    """,
+                    (vehicle_number,),
+                )
+                found = cur.fetchone()
+                if not found:
+                    return None
 
-        for s in sessions:
-            if s["vehicle_number"] == vehicle_number:
-                found = s
-            else:
-                remaining.append(s)
+                exit_time = datetime.now()
+                duration, fee = _calculate_fee(
+                    found["entry_time"], exit_time, found["vehicle_type"]
+                )
 
-        if not found:
-            return None
-
-        exit_time = datetime.now()
-        duration, fee = _calculate_fee(found["entry_time"], exit_time, found["vehicle_type"])
-
-        _append_to_log({
-            "vehicle_number": vehicle_number,
-            "vehicle_type": found["vehicle_type"],
-            "slot": found["slot"],
-            "entry_time": found["entry_time"],
-            "exit_time": exit_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "duration_hours": duration,
-            "fee": fee,
-        })
-        _write_active_sessions(remaining)
-        return int(found["slot"]), duration, fee
+                cur.execute(
+                    """
+                    INSERT INTO parking_log
+                        (vehicle_number, vehicle_type, slot, entry_time,
+                         exit_time, duration_hours, fee)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        vehicle_number,
+                        found["vehicle_type"],
+                        found["slot"],
+                        found["entry_time"],
+                        exit_time,
+                        duration,
+                        fee,
+                    ),
+                )
+                cur.execute(
+                    "DELETE FROM active_sessions WHERE vehicle_number = %s",
+                    (vehicle_number,),
+                )
+            conn.commit()
+            return int(found["slot"]), duration, fee
+        finally:
+            conn.close()
 
     def get_parked_vehicles(self):
-        sessions = _read_active_sessions()
-        sessions.sort(key=lambda x: int(x["slot"]))
-        return sessions
+        conn = get_connection()
+        try:
+            ensure_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT slot, vehicle_number, vehicle_type, entry_time
+                    FROM active_sessions ORDER BY slot
+                    """
+                )
+                rows = cur.fetchall()
+            return [
+                {
+                    "slot": row["slot"],
+                    "vehicle_number": row["vehicle_number"],
+                    "vehicle_type": row["vehicle_type"],
+                    "entry_time": row["entry_time"].strftime(DATE_FMT),
+                }
+                for row in rows
+            ]
+        finally:
+            conn.close()
 
     def get_status(self):
-        occupied = len(_read_active_sessions())
-        available = self.total_slots - occupied
-        pct = (occupied / self.total_slots * 100) if self.total_slots else 0
-        return {
-            "total": self.total_slots,
-            "occupied": occupied,
-            "available": available,
-            "occupancy_pct": round(pct, 1),
-        }
+        conn = get_connection()
+        try:
+            ensure_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS n FROM active_sessions")
+                occupied = cur.fetchone()["n"]
+            available = self.total_slots - occupied
+            pct = (occupied / self.total_slots * 100) if self.total_slots else 0
+            return {
+                "total": self.total_slots,
+                "occupied": occupied,
+                "available": available,
+                "occupancy_pct": round(pct, 1),
+            }
+        finally:
+            conn.close()

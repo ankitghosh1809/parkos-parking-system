@@ -1,20 +1,41 @@
 import os
-import csv
-from datetime import datetime, date
 from collections import defaultdict
+from datetime import date, datetime
 
-DATA_DIR = "/tmp/parking_data"
-LOG_FILE = os.path.join(DATA_DIR, "parking_log.csv")
-REPORTS_DIR = os.path.join(DATA_DIR, "reports")
+from db import get_connection, ensure_schema
 
-LOG_HEADERS = ["vehicle_number", "vehicle_type", "slot", "entry_time", "exit_time", "duration_hours", "fee"]
+DATE_FMT = "%Y-%m-%d %H:%M:%S"
+REPORTS_DIR = "/tmp/parking_data/reports"
 
 
 def read_log():
-    if not os.path.exists(LOG_FILE):
-        return []
-    with open(LOG_FILE, "r", newline="") as f:
-        return list(csv.DictReader(f))
+    conn = get_connection()
+    try:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT vehicle_number, vehicle_type, slot, entry_time,
+                       exit_time, duration_hours, fee
+                FROM parking_log
+                ORDER BY exit_time
+                """
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "vehicle_number": row["vehicle_number"],
+                "vehicle_type": row["vehicle_type"],
+                "slot": row["slot"],
+                "entry_time": row["entry_time"].strftime(DATE_FMT),
+                "exit_time": row["exit_time"].strftime(DATE_FMT),
+                "duration_hours": row["duration_hours"],
+                "fee": float(row["fee"]),
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
 
 
 def generate_daily_report(target_date=None):
@@ -26,7 +47,7 @@ def generate_daily_report(target_date=None):
     day_records = []
     for r in all_records:
         try:
-            exit_dt = datetime.strptime(r["exit_time"], "%Y-%m-%d %H:%M:%S")
+            exit_dt = datetime.strptime(r["exit_time"], DATE_FMT)
             if exit_dt.date() == target_date:
                 day_records.append(r)
         except (ValueError, KeyError):
@@ -42,9 +63,9 @@ def generate_daily_report(target_date=None):
     report_path = os.path.join(REPORTS_DIR, f"report_{target_date}.txt")
     with open(report_path, "w") as f:
         f.write("=" * 50 + "\n")
-        f.write(f"  DAILY PARKING REVENUE REPORT\n")
+        f.write("  DAILY PARKING REVENUE REPORT\n")
         f.write(f"  Date      : {target_date}\n")
-        f.write(f"  Generated : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"  Generated : {datetime.now().strftime(DATE_FMT)}\n")
         f.write("=" * 50 + "\n\n")
         f.write(f"Total Vehicles Served : {len(day_records)}\n")
         f.write(f"Total Revenue         : Rs. {total_revenue:.2f}\n\n")
@@ -52,7 +73,10 @@ def generate_daily_report(target_date=None):
         f.write("-" * 35 + "\n")
         if by_type:
             for vtype, info in sorted(by_type.items()):
-                f.write(f"  {vtype.capitalize():<10} : {info['count']} vehicle(s), Rs. {info['revenue']:.2f}\n")
+                f.write(
+                    f"  {vtype.capitalize():<10} : {info['count']} vehicle(s), "
+                    f"Rs. {info['revenue']:.2f}\n"
+                )
         else:
             f.write("  No vehicles served today.\n")
         f.write("\nTransaction Details:\n")
@@ -60,7 +84,10 @@ def generate_daily_report(target_date=None):
         if day_records:
             f.write(f"{'#':<4}{'Vehicle No.':<18}{'Type':<8}{'Slot':<6}{'Hrs':<6}{'Fee'}\n")
             for i, r in enumerate(day_records, 1):
-                f.write(f"{i:<4}{r['vehicle_number']:<18}{r['vehicle_type']:<8}{r['slot']:<6}{r['duration_hours']:<6}Rs. {float(r['fee']):.2f}\n")
+                f.write(
+                    f"{i:<4}{r['vehicle_number']:<18}{r['vehicle_type']:<8}"
+                    f"{r['slot']:<6}{r['duration_hours']:<6}Rs. {float(r['fee']):.2f}\n"
+                )
         else:
             f.write("  No transactions found for this date.\n")
         f.write("\n" + "=" * 50 + "\n")
@@ -79,5 +106,8 @@ def get_all_time_summary():
     return {
         "total_sessions": len(records),
         "total_revenue": round(total_revenue, 2),
-        "by_type": {k: {"count": v["count"], "revenue": round(v["revenue"], 2)} for k, v in by_type.items()},
+        "by_type": {
+            k: {"count": v["count"], "revenue": round(v["revenue"], 2)}
+            for k, v in by_type.items()
+        },
     }
