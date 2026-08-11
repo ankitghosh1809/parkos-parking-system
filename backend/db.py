@@ -20,8 +20,20 @@ def get_connection():
     return psycopg2.connect(dsn, cursor_factory=psycopg2.extras.RealDictCursor)
 
 
+_schema_ready = False
+
+
 def ensure_schema(conn):
-    """Create the tables if they don't exist yet. Safe to call every request."""
+    """Create the tables if they don't exist yet.
+
+    Safe to call every request, but skips the round trip once this
+    process has already confirmed the schema exists (serverless
+    containers stay warm between invocations, so this still means the
+    DDL only runs once per cold start instead of on every call).
+    """
+    global _schema_ready
+    if _schema_ready:
+        return
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -49,3 +61,4 @@ def ensure_schema(conn):
             """
         )
     conn.commit()
+    _schema_ready = True

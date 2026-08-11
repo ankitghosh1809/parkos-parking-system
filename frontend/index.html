@@ -628,6 +628,7 @@
   <div class="header-status">
     <div class="live-badge"><div class="live-dot"></div>LIVE</div>
     <div class="slot-ticker">SLOTS: <span id="hdr-occ">—</span> / <span id="hdr-total">—</span></div>
+    <div id="auth-badge" style="font-size:12px;font-weight:700;letter-spacing:0.03em"></div>
   </div>
 </header>
 
@@ -948,10 +949,32 @@
             <tbody id="history-table"><tr><td colspan="8" style="text-align:center;color:var(--muted);padding:32px">Loading…</td></tr></tbody>
           </table>
         </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-top:1px solid var(--border)">
+          <div id="history-count" style="color:var(--muted);font-size:13px"></div>
+          <button class="btn btn-ghost btn-sm" id="history-more" style="display:none" onclick="loadMoreHistory()">LOAD MORE</button>
+        </div>
       </div>
     </div>
 
   </main>
+</div>
+
+<!-- OPERATOR LOGIN MODAL -->
+<div class="modal-backdrop" id="login-modal">
+  <div class="modal">
+    <div class="modal-title">OPERATOR LOGIN</div>
+    <div class="modal-sub">Required to park or check out vehicles</div>
+    <div class="form-row" style="margin-top:16px">
+      <label>Password</label>
+      <input type="password" id="login-password" placeholder="Operator password" onkeydown="loginOnEnter(event)" autocomplete="current-password">
+    </div>
+    <div id="login-error" style="color:var(--danger);font-size:13px;min-height:18px"></div>
+    <hr class="divider"/>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-ghost" onclick="closeLogin()" style="flex:1">CANCEL</button>
+      <button class="btn btn-primary" id="login-btn" style="flex:2" onclick="submitLogin()">LOG IN</button>
+    </div>
+  </div>
 </div>
 
 <!-- CHECKOUT RECEIPT MODAL -->
@@ -971,6 +994,77 @@
 <script>
   // ── CONFIG ────────────────────────────────────────────────
   const API = "";
+  const TOKEN_KEY = 'parkos_token';
+
+  // ── SECURITY: escape any user-supplied value before it goes into
+  // innerHTML, whether as text content or inside an attribute. Every
+  // vehicle_number/vehicle_type coming back from the API must go
+  // through this before being interpolated into a template string.
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // ── AUTH ──────────────────────────────────────────────────
+  function getToken() { return localStorage.getItem(TOKEN_KEY); }
+  function setToken(t) { localStorage.setItem(TOKEN_KEY, t); updateAuthBadge(); }
+  function clearToken() { localStorage.removeItem(TOKEN_KEY); updateAuthBadge(); }
+
+  function updateAuthBadge() {
+    const badge = document.getElementById('auth-badge');
+    if (!badge) return;
+    if (getToken()) {
+      badge.innerHTML = `<span style="color:var(--green)">OPERATOR LOGGED IN</span> · <a href="#" onclick="logout();return false;" style="color:var(--muted)">Logout</a>`;
+    } else {
+      badge.innerHTML = `<a href="#" onclick="openLogin();return false;" style="color:var(--accent)">OPERATOR LOGIN</a>`;
+    }
+  }
+
+  function openLogin(message) {
+    document.getElementById('login-error').textContent = message || '';
+    document.getElementById('login-password').value = '';
+    document.getElementById('login-modal').classList.add('open');
+    setTimeout(() => document.getElementById('login-password').focus(), 50);
+  }
+  function closeLogin() {
+    document.getElementById('login-modal').classList.remove('open');
+  }
+
+  async function submitLogin() {
+    const pw = document.getElementById('login-password').value;
+    if (!pw) { document.getElementById('login-error').textContent = 'Password required'; return; }
+    const btn = document.getElementById('login-btn');
+    btn.disabled = true;
+    try {
+      const res = await fetch(API + '/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Login failed');
+      setToken(data.token);
+      closeLogin();
+      toast('success', 'LOGGED IN', 'You can now park and check out vehicles.');
+    } catch (e) {
+      document.getElementById('login-error').textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function loginOnEnter(ev) {
+    if (ev.key === 'Enter') submitLogin();
+  }
+
+  function logout() {
+    clearToken();
+    toast('success', 'LOGGED OUT', 'Operator session ended.');
+  }
 
   // ── NAVIGATION ────────────────────────────────────────────
   const views = ['dashboard','park','checkout','vehicles','slots','report','history'];
@@ -990,10 +1084,18 @@
 
   // ── API HELPERS ───────────────────────────────────────────
   async function api(path, opts = {}) {
-    const res = await fetch(API + path, {
-      headers: { 'Content-Type': 'application/json' },
-      ...opts,
-    });
+    const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+    const token = getToken();
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+
+    const res = await fetch(API + path, { ...opts, headers });
+
+    if (res.status === 401) {
+      clearToken();
+      openLogin('Please log in as an operator to do that.');
+      throw new Error('Login required');
+    }
+
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Request failed');
     return data;
@@ -1010,7 +1112,8 @@
 
   // ── BADGE ─────────────────────────────────────────────────
   function typeBadge(t) {
-    return `<span class="badge badge-${t}">${t}</span>`;
+    const safe = escapeHtml(t);
+    return `<span class="badge badge-${safe}">${safe}</span>`;
   }
 
   // ── HEADER TICKER ─────────────────────────────────────────
@@ -1065,11 +1168,11 @@
     }
     tbody.innerHTML = vehicles.map(v => `
       <tr>
-        <td><strong>${v.slot}</strong></td>
-        <td><span style="font-family:var(--mono);font-size:13px;font-weight:700">${v.vehicle_number}</span></td>
+        <td><strong>${escapeHtml(v.slot)}</strong></td>
+        <td><span style="font-family:var(--mono);font-size:13px;font-weight:700">${escapeHtml(v.vehicle_number)}</span></td>
         <td>${typeBadge(v.vehicle_type)}</td>
-        <td style="color:var(--muted)">${v.entry_time}</td>
-        <td>${withAction ? `<button class="btn btn-danger btn-sm" onclick="quickCheckoutFromTable('${v.vehicle_number}')">CHECKOUT</button>` : ''}</td>
+        <td style="color:var(--muted)">${escapeHtml(v.entry_time)}</td>
+        <td>${withAction ? `<button class="btn btn-danger btn-sm" data-vehicle="${escapeHtml(v.vehicle_number)}" onclick="quickCheckoutFromTable(this.dataset.vehicle)">CHECKOUT</button>` : ''}</td>
       </tr>
     `).join('');
   }
@@ -1117,9 +1220,9 @@
       });
       const result = document.getElementById('pk-result');
       document.getElementById('pk-result-body').innerHTML = `
-        <div class="receipt-row"><span class="key">Vehicle</span><span class="val">${r.vehicle_number}</span></div>
-        <div class="receipt-row"><span class="key">Type</span><span class="val">${r.vehicle_type}</span></div>
-        <div class="receipt-row"><span class="key">Assigned Slot</span><span class="val" style="color:var(--accent);font-size:22px">${r.slot}</span></div>
+        <div class="receipt-row"><span class="key">Vehicle</span><span class="val">${escapeHtml(r.vehicle_number)}</span></div>
+        <div class="receipt-row"><span class="key">Type</span><span class="val">${escapeHtml(r.vehicle_type)}</span></div>
+        <div class="receipt-row"><span class="key">Assigned Slot</span><span class="val" style="color:var(--accent);font-size:22px">${escapeHtml(r.slot)}</span></div>
       `;
       result.style.display = 'block';
       document.getElementById('pk-number').value = '';
@@ -1144,7 +1247,7 @@
 
   async function doCheckout(num) {
     try {
-      const r = await api(`/api/checkout/${num}`, { method: 'POST' });
+      const r = await api(`/api/checkout/${encodeURIComponent(num)}`, { method: 'POST' });
       showReceipt(r);
       toast('success', 'CHECKOUT', `Fee: ₹${r.fee}`);
       refreshHeader(); refreshSidebar();
@@ -1226,12 +1329,12 @@
       tbody.innerHTML = r.transactions.map((t, i) => `
         <tr>
           <td>${i + 1}</td>
-          <td><strong>${t.vehicle_number}</strong></td>
+          <td><strong>${escapeHtml(t.vehicle_number)}</strong></td>
           <td>${typeBadge(t.vehicle_type)}</td>
-          <td>${t.slot}</td>
-          <td>${t.duration_hours}h</td>
-          <td style="color:var(--muted)">${t.entry_time}</td>
-          <td style="color:var(--muted)">${t.exit_time}</td>
+          <td>${escapeHtml(t.slot)}</td>
+          <td>${escapeHtml(t.duration_hours)}h</td>
+          <td style="color:var(--muted)">${escapeHtml(t.entry_time)}</td>
+          <td style="color:var(--muted)">${escapeHtml(t.exit_time)}</td>
           <td style="color:var(--accent);font-weight:700">₹${parseFloat(t.fee).toFixed(2)}</td>
         </tr>
       `).join('');
@@ -1240,34 +1343,60 @@
     }
   }
 
-  // ── HISTORY ───────────────────────────────────────────────
+  // ── HISTORY (paginated - the log grows without bound, so we only
+  // ever pull one page at a time instead of the whole table) ───────
+  const HISTORY_PAGE_SIZE = 50;
+  let historyOffset = 0;
+  let historyRows = [];
+
   async function loadHistory() {
+    historyOffset = 0;
+    historyRows = [];
+    await fetchHistoryPage();
+  }
+
+  async function loadMoreHistory() {
+    await fetchHistoryPage();
+  }
+
+  async function fetchHistoryPage() {
     try {
-      const { records } = await api('/api/log');
-      const tbody = document.getElementById('history-table');
-      if (!records.length) {
-        tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="empty-state-icon">📋</div><p>No transactions yet</p></div></td></tr>`;
-        return;
-      }
-      const rev = [...records].reverse();
-      tbody.innerHTML = rev.map((r, i) => `
-        <tr>
-          <td>${rev.length - i}</td>
-          <td><strong>${r.vehicle_number}</strong></td>
-          <td>${typeBadge(r.vehicle_type)}</td>
-          <td>${r.slot}</td>
-          <td>${r.duration_hours}h</td>
-          <td style="color:var(--muted)">${r.entry_time}</td>
-          <td style="color:var(--muted)">${r.exit_time}</td>
-          <td style="color:var(--accent);font-weight:700">₹${parseFloat(r.fee).toFixed(2)}</td>
-        </tr>
-      `).join('');
+      const { records, total } = await api(`/api/log?limit=${HISTORY_PAGE_SIZE}&offset=${historyOffset}`);
+      historyRows = historyOffset === 0 ? records : historyRows.concat(records);
+      historyOffset += records.length;
+      renderHistoryTable(total);
     } catch (e) {
       toast('error', 'ERROR', e.message);
     }
   }
 
+  function renderHistoryTable(total) {
+    const tbody = document.getElementById('history-table');
+    if (!historyRows.length) {
+      tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="empty-state-icon">📋</div><p>No transactions yet</p></div></td></tr>`;
+    } else {
+      tbody.innerHTML = historyRows.map((r, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td><strong>${escapeHtml(r.vehicle_number)}</strong></td>
+          <td>${typeBadge(r.vehicle_type)}</td>
+          <td>${escapeHtml(r.slot)}</td>
+          <td>${escapeHtml(r.duration_hours)}h</td>
+          <td style="color:var(--muted)">${escapeHtml(r.entry_time)}</td>
+          <td style="color:var(--muted)">${escapeHtml(r.exit_time)}</td>
+          <td style="color:var(--accent);font-weight:700">₹${parseFloat(r.fee).toFixed(2)}</td>
+        </tr>
+      `).join('');
+    }
+
+    const label = document.getElementById('history-count');
+    const moreBtn = document.getElementById('history-more');
+    if (label) label.textContent = `Showing ${historyRows.length} of ${total}`;
+    if (moreBtn) moreBtn.style.display = historyRows.length < total ? 'inline-flex' : 'none';
+  }
+
   // ── INIT ──────────────────────────────────────────────────
+  updateAuthBadge();
   loadDashboard();
   setInterval(refreshHeader, 30000);
 </script>

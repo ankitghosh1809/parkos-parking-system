@@ -1,13 +1,22 @@
-import sys, os
+import os
+import re
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from datetime import date
 
-from parking import ParkingLot
-from reports import generate_daily_report, get_all_time_summary, read_log
+from auth import check_password, create_token, require_auth
+from parking import ParkingLot, VehicleAlreadyParkedError, LotFullError
+from reports import (
+    count_log_entries,
+    generate_daily_report,
+    get_all_time_summary,
+    read_log,
+)
 
 app = FastAPI(
     title="Parking Management API",
@@ -15,15 +24,25 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Same-origin in production (frontend and API are served from the same
+# Vercel deployment - see vercel.json), so this only matters for local
+# dev against a separately-served frontend. Configure ALLOWED_ORIGINS
+# as a comma-separated list if you need to call the API from elsewhere.
+_allowed_origins = os.environ.get(
+    "ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten this in production
-    allow_credentials=True,
+    allow_origins=[o.strip() for o in _allowed_origins if o.strip()],
+    allow_credentials=False,  # auth uses a Bearer token, not cookies
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 lot = ParkingLot(total_slots=50)
+
+VEHICLE_NUMBER_PATTERN = re.compile(r"^[A-Z0-9\- ]{1,20}$")
 
 
 # ── request/response models ────────────────────────────────
@@ -46,7 +65,26 @@ class ParkRequest(BaseModel):
         v = v.strip().upper()
         if not v:
             raise ValueError("vehicle_number cannot be empty")
+        if not VEHICLE_NUMBER_PATTERN.match(v):
+            raise ValueError(
+                "vehicle_number may only contain letters, numbers, "
+                "hyphens, and spaces (max 20 characters)"
+            )
         return v
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+
+# ── auth ───────────────────────────────────────────────────
+
+@app.post("/api/login", summary="Operator login")
+def login(body: LoginRequest):
+    """Exchanges the shared operator password for a bearer token."""
+    if not check_password(body.password):
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    return {"token": create_token()}
 
 
 # ── routes ─────────────────────────────────────────────────
@@ -63,14 +101,20 @@ def list_vehicles():
     return {"vehicles": lot.get_parked_vehicles()}
 
 
-@app.post("/api/park", summary="Park a vehicle")
+@app.post("/api/park", summary="Park a vehicle", dependencies=[Depends(require_auth)])
 def park_vehicle(body: ParkRequest):
-    """Parks a vehicle and returns the assigned slot."""
-    slot = lot.park_vehicle(body.vehicle_number, body.vehicle_type)
-    if slot is None:
+    """Parks a vehicle and returns the assigned slot. Requires operator login."""
+    try:
+        slot = lot.park_vehicle(body.vehicle_number, body.vehicle_type)
+    except VehicleAlreadyParkedError:
         raise HTTPException(
             status_code=409,
-            detail="Could not park vehicle. It may already be parked or the lot is full.",
+            detail=f"{body.vehicle_number} is already parked in the lot.",
+        )
+    except LotFullError:
+        raise HTTPException(
+            status_code=409,
+            detail="The lot is full. No free slots are available right now.",
         )
     return {
         "message": "Vehicle parked successfully",
@@ -80,10 +124,14 @@ def park_vehicle(body: ParkRequest):
     }
 
 
-@app.post("/api/checkout/{vehicle_number}", summary="Checkout a vehicle")
+@app.post(
+    "/api/checkout/{vehicle_number}",
+    summary="Checkout a vehicle",
+    dependencies=[Depends(require_auth)],
+)
 def checkout_vehicle(vehicle_number: str):
-    """Removes a vehicle, logs the session, and returns the fee."""
-    result = lot.remove_vehicle(vehicle_number.upper())
+    """Removes a vehicle, logs the session, and returns the fee. Requires operator login."""
+    result = lot.remove_vehicle(vehicle_number.strip().upper())
     if result is None:
         raise HTTPException(
             status_code=404,
@@ -100,9 +148,16 @@ def checkout_vehicle(vehicle_number: str):
 
 
 @app.get("/api/log", summary="Transaction history")
-def transaction_log():
-    """Returns all completed parking sessions."""
-    return {"records": read_log()}
+def transaction_log(limit: int = 50, offset: int = 0):
+    """Returns completed parking sessions, most recent first, paginated."""
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    return {
+        "records": read_log(limit=limit, offset=offset),
+        "total": count_log_entries(),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @app.get("/api/report", summary="Generate daily report")

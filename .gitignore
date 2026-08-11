@@ -4,8 +4,6 @@ __pycache__/
 venv/
 env/
 .venv/
-backend/data/active_sessions.csv
-backend/data/parking_log.csv
 backend/data/reports/
 .pytest_cache/
 .DS_Store
@@ -13,3 +11,5 @@ Thumbs.db
 .idea/
 .vscode/
 .vercel
+.env
+.env.local

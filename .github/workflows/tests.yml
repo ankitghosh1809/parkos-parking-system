@@ -1,0 +1,55 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: parkos
+          POSTGRES_PASSWORD: parkos
+          POSTGRES_DB: parkos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://parkos:parkos@localhost:5432/parkos_test
+          SECRET_KEY: ci-only-secret-not-used-anywhere-real
+          OPERATOR_PASSWORD: ci-only-password-not-used-anywhere-real
+        run: pytest tests/ -v
+
+      - name: Fail if tests were silently skipped
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://parkos:parkos@localhost:5432/parkos_test
+        run: |
+          skipped=$(pytest tests/ -v 2>&1 | grep -c SKIPPED || true)
+          if [ "$skipped" -gt 0 ]; then
+            echo "::error::$skipped test(s) were skipped in CI - DATABASE_URL should always be set here. Check the service container."
+            exit 1
+          fi

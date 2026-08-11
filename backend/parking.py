@@ -7,6 +7,20 @@ from db import get_connection, ensure_schema
 PARKING_RATES = {"car": 30, "bike": 10, "truck": 60}
 DATE_FMT = "%Y-%m-%d %H:%M:%S"
 
+MAX_SLOT_RACE_RETRIES = 3
+
+
+class VehicleAlreadyParkedError(Exception):
+    """Raised when the vehicle_number already has an active session."""
+
+    def __init__(self, vehicle_number):
+        self.vehicle_number = vehicle_number
+        super().__init__(f"{vehicle_number} is already parked")
+
+
+class LotFullError(Exception):
+    """Raised when there is no free slot for the requested vehicle."""
+
 
 def _calculate_fee(entry_time, exit_time, vehicle_type):
     delta = exit_time - entry_time
@@ -29,6 +43,15 @@ class ParkingLot:
         return None
 
     def park_vehicle(self, vehicle_number, vehicle_type):
+        """Park a vehicle and return its assigned slot.
+
+        Raises VehicleAlreadyParkedError or LotFullError instead of
+        returning None, so callers can tell the two apart. A slot
+        collision from a concurrent request (two requests both seeing
+        the same "free" slot before either commits) is retried with a
+        fresh free-slot scan rather than immediately failing - that
+        collision doesn't mean the lot is actually full.
+        """
         conn = get_connection()
         try:
             ensure_schema(conn)
@@ -38,27 +61,38 @@ class ParkingLot:
                     (vehicle_number,),
                 )
                 if cur.fetchone():
-                    return None  # already parked
+                    raise VehicleAlreadyParkedError(vehicle_number)
 
-                slot = self._find_free_slot(cur)
-                if slot is None:
-                    return None  # lot full
+            for _ in range(MAX_SLOT_RACE_RETRIES):
+                with conn.cursor() as cur:
+                    slot = self._find_free_slot(cur)
+                    if slot is None:
+                        raise LotFullError()
 
-                entry_time = datetime.now()
-                try:
-                    cur.execute(
-                        """
-                        INSERT INTO active_sessions
-                            (slot, vehicle_number, vehicle_type, entry_time)
-                        VALUES (%s, %s, %s, %s)
-                        """,
-                        (slot, vehicle_number, vehicle_type, entry_time),
-                    )
-                except psycopg2.IntegrityError:
-                    conn.rollback()
-                    return None
-            conn.commit()
-            return slot
+                    entry_time = datetime.now()
+                    try:
+                        cur.execute(
+                            """
+                            INSERT INTO active_sessions
+                                (slot, vehicle_number, vehicle_type, entry_time)
+                            VALUES (%s, %s, %s, %s)
+                            """,
+                            (slot, vehicle_number, vehicle_type, entry_time),
+                        )
+                    except psycopg2.IntegrityError as e:
+                        conn.rollback()
+                        constraint = getattr(e.diag, "constraint_name", "") or ""
+                        if "vehicle_number" in constraint:
+                            raise VehicleAlreadyParkedError(vehicle_number)
+                        # Otherwise it's the slot uniqueness constraint -
+                        # someone else grabbed this slot first. Loop and
+                        # pick a different free slot instead of giving up.
+                        continue
+                conn.commit()
+                return slot
+
+            # Exhausted retries under heavy contention on the same slot.
+            raise LotFullError()
         finally:
             conn.close()
 

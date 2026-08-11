@@ -8,19 +8,29 @@ DATE_FMT = "%Y-%m-%d %H:%M:%S"
 REPORTS_DIR = "/tmp/parking_data/reports"
 
 
-def read_log():
+def read_log(limit=None, offset=0):
+    """Return parking_log rows, newest first.
+
+    With limit=None (the default), returns every row - that's what the
+    report/summary aggregations need. Pass an explicit limit to page
+    through the log instead of pulling the whole table (used by the
+    /api/log endpoint).
+    """
     conn = get_connection()
     try:
         ensure_schema(conn)
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            query = """
                 SELECT vehicle_number, vehicle_type, slot, entry_time,
                        exit_time, duration_hours, fee
                 FROM parking_log
-                ORDER BY exit_time
-                """
-            )
+                ORDER BY exit_time DESC
+            """
+            params = []
+            if limit is not None:
+                query += " LIMIT %s OFFSET %s"
+                params = [limit, offset]
+            cur.execute(query, params)
             rows = cur.fetchall()
         return [
             {
@@ -34,6 +44,17 @@ def read_log():
             }
             for row in rows
         ]
+    finally:
+        conn.close()
+
+
+def count_log_entries():
+    conn = get_connection()
+    try:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM parking_log")
+            return cur.fetchone()["n"]
     finally:
         conn.close()
 
