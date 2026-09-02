@@ -73,10 +73,7 @@ def check_password(password: str) -> bool:
     """Timing-safe comparison against OPERATOR_PASSWORD."""
     expected = os.environ.get("OPERATOR_PASSWORD")
     if not expected:
-        raise RuntimeError(
-            "OPERATOR_PASSWORD environment variable is not set. "
-            "Add it in Vercel: Project Settings -> Environment Variables."
-        )
+        return False
     return hmac.compare_digest(password or "", expected)
 
 
